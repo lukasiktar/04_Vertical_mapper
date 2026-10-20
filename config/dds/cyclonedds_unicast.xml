@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  CycloneDDS profile for Jetson <-> laptop over Wi-Fi (multicast is unreliable/blocked on
+  most Wi-Fi networks, so discovery uses unicast peers).
+
+  Used when the container is started with (see docs/JETSON.md):
+    D455_RMW=rmw_cyclonedds_cpp
+    CYCLONEDDS_URI=file:///workspaces/isaac_ros-dev/config/dds/cyclonedds_unicast.xml
+    D455_PEER=<IP of the OTHER machine>
+  CycloneDDS expands ${D455_PEER} from the environment.
+-->
+<CycloneDDS xmlns="https://cdds.io/config"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+  <Domain Id="any">
+    <General>
+      <Interfaces>
+        <NetworkInterface autodetermine="true" priority="default" multicast="default"/>
+      </Interfaces>
+      <AllowMulticast>false</AllowMulticast>
+      <MaxMessageSize>65500B</MaxMessageSize>
+    </General>
+    <Discovery>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>100</MaxAutoParticipantIndex>
+      <Peers>
+        <Peer address="localhost"/>
+        <Peer address="${D455_PEER}"/>
+      </Peers>
+    </Discovery>
+    <Internal>
+      <SocketReceiveBufferSize min="10MB"/>
+      <Watermarks>
+        <WhcHigh>500kB</WhcHigh>
+      </Watermarks>
+    </Internal>
+  </Domain>
+</CycloneDDS>

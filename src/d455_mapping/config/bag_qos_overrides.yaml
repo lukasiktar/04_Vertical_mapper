@@ -1,0 +1,7 @@
+# ros2 bag play --qos-profile-overrides-path <this file>
+# /tf_static must be replayed latched (transient_local) or late subscribers miss the
+# camera extrinsics.
+/tf_static:
+  history: keep_all
+  reliability: reliable
+  durability: transient_local

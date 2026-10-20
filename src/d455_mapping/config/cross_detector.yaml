@@ -1,0 +1,70 @@
+# Cross detector defaults (ros2 param file for the node /cross_detector).
+# Values per platform (process_every_n, detect_scale, max_segments) are in laptop.yaml /
+# orin_nano.yaml under `cross_detector:`; the launch file applies them on top of this file.
+/**:
+  ros__parameters:
+    # --- topics / frames ---
+    color_topic: /camera/color/image_raw
+    depth_topic: /camera/aligned_depth_splitter/output/depth   # launch picks the raw aligned topic when emitter_on_off is false
+    info_topic: /camera/color/camera_info
+    target_frame: map
+    landmarks_file: ''             # JSON; the launch sets /maps/<map name>_crosses.json
+    start_empty: false             # true (set by mapping.launch.py): ignore an existing file, keep it as .bak
+    require_localization: false    # true in localization mode: fuse only after RTAB-Map relocalized
+    localization_topic: /rtabmap/localization_pose
+    localization_timeout_s: 30.0
+    sync_slop_s: 0.04
+    tf_fallback_latest: true
+    save_period_s: 10.0            # autosave when a landmark changed (and always on shutdown)
+    landmarks_publish_hz: 2.0
+    marker_arm_m: 0.3              # drawn arm length in RViz
+
+    # --- 2D candidates: beams = pairs of parallel edges; cross = two beams crossing ---
+    canny_low: 50.0
+    canny_high: 150.0
+    blur_ksize: 5
+    hough_threshold: 40
+    min_segment_px: 40.0
+    max_line_gap_px: 15.0
+    max_segments: 100
+    collinear_gap_px: 80.0         # edge pieces on one line are joined across gaps up to this
+    collinear_tol_deg: 3.0
+    parallel_tol_deg: 6.0          # the two edges of a beam
+    min_beam_width_px: 5.0         # beam width = distance between its two edges
+    max_beam_width_px: 70.0
+    max_width_ratio: 2.0           # both beams of a cross have about the same width
+    beam_contrast: 10.0            # gray levels, beam interior vs BOTH outsides (same sign)
+    min_arm_support: 0.6           # fraction of beam samples passing the contrast test
+    min_cross_angle_deg: 35.0
+    min_arm_px: 40.0               # beam length required on each side of the crossing
+    max_arm_px: 120.0              # arm length used for depth sampling
+    merge_px: 30.0
+
+    # --- depth verification ---
+    min_depth_m: 0.3
+    max_depth_m: 4.0
+    plane_tol_m: 0.03
+    min_inlier_ratio: 0.7
+    min_valid_ratio: 0.5
+    min_valid_per_arm: 3
+    patch_px: 2
+    near_percentile: 10.0
+    samples_per_arm: 12
+    ransac_iters: 150
+    min_view_cos: 0.15
+    expected_cross_angle_deg: 90.0 # beam angle measured in 3D (the image angle is distorted by perspective)
+    cross_angle_tol_deg: 12.0      # >= 90 switches off
+    min_beam_width_m: 0.0          # physical beam width limits, 0 = off. The debug image shows each
+    max_beam_width_m: 0.0          # detection's measured width ("w 5 cm"): read the real one there
+    vertical_tol_deg: 20.0         # crosses are on vertical surfaces: plane normal horizontal within
+                                   # this angle, using gravity from /imu/data (0 = off)
+    imu_topic: /imu/data
+    imu_fallback_frame: camera_gyro_optical_frame   # the united IMU's own frame has no TF
+
+    # --- landmarks ---
+    landmark_merge_m: 0.3
+    min_observations: 5
+    tentative_ttl_s: 15.0
+    max_weight: 50.0
+    max_landmarks: 2               # keep only the N best-observed crosses (0 = unlimited)
+    replace_margin: 1.5            # a challenger needs this many times the weakest one's observations

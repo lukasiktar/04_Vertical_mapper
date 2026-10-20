@@ -1,0 +1,77 @@
+# Platform config: Jetson Orin Nano 8 GB (JetPack 6.1/6.2, CPU+GPU share the 8 GB).
+# Selected with `platform:=orin_nano`. Same keys as laptop.yaml; lighter values.
+
+# Depth limit [m] for everything that builds geometry: RTAB-Map grid/cloud (Grid/RangeMax),
+# nvblox integration range, the RViz map cloud and the default of export_map.sh. 0 = no limit.
+# The camera, the raw bags and the database keep FULL depth, so this can be changed later.
+# cuVSLAM is stereo-based and not affected. Features for loop closure are limited separately
+# (rtabmap.features_max_depth).
+depth_max_m: 3.0
+
+camera:
+  serial_no: ''
+  usb_port_id: ''
+  depth_width: 848
+  depth_height: 480
+  depth_fps: 30               # 15 is the low-load option (cuVSLAM then gets only 7.5 Hz IR
+                              # with interleave, which is marginal for tracking; prefer 30)
+  color_width: 640
+  color_height: 480
+  color_fps: 15
+  gyro_fps: 200
+  accel_fps: 200
+  emitter_on_off: true
+  invert_emitter_mode: true   # same camera + firmware as on the laptop (see laptop.yaml)
+  initial_reset: false
+
+base_to_camera:
+  xyz: [0.0, 0.0, 0.0]
+  rpy: [0.0, 0.0, 0.0]
+
+vslam:
+  enable_imu_fusion: true
+  image_jitter_threshold_ms: 0.0
+  enable_observations_view: false  # no debug clouds over Wi-Fi
+  verbosity: 1
+
+rtabmap:
+  features_max_depth: 0.0          # Kp/MaxDepth + Vis/MaxDepth [m]; 0 = off. Using the depth limit here
+                                   # too also drops far features for loop closure (can weaken loop
+                                   # closures and relocalization in big rooms; map and localize with
+                                   # the same value)
+  odom_source: tf
+  odom_linear_variance: 0.001
+  odom_angular_variance: 0.001
+  detection_rate: 1.0
+  kp_max_features: 400
+  vis_max_features: 600
+  stm_size: 20
+  linear_update: 0.1
+  angular_update: 0.1
+  grid_cell_size: 0.1
+  cloud_decimation: 4
+  use_imu: true
+  queue_size: 20
+
+nvblox:
+  enable: false                    # off by default: shares the 8 GB with everything else
+  voxel_size: 0.10
+  map_clearing_radius_m: 6.0       # bound memory: drop blocks > 6 m from the camera
+  integrate_depth_rate_hz: 10.0
+  integrate_color_rate_hz: 2.0
+  update_mesh_rate_hz: 1.0
+  publish_layer_rate_hz: 1.0
+
+cross_detector:                    # cross detector (README "Cross detection"); overrides config/cross_detector.yaml
+  process_every_n: 3                 # 15 Hz synced frames -> 5 Hz detection
+  detect_scale: 0.5                # RGB detection resolution factor (pixel parameters stay full-resolution)
+  max_segments: 50               # longest line segments that are paired (cost grows with the square)
+
+rviz:
+  show_prior_map: false              # localize.sh also shows the saved cloud (whole map) in RViz
+  enable: false                    # RViz runs on the laptop (docs/JETSON.md)
+  config_suffix: '_remote'
+
+record:
+  max_bag_size_bytes: 0
+  compression: ''

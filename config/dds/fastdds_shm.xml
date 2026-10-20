@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Fast DDS (Isaac ROS default RMW) profile, set by scripts/dev.sh as
+  FASTRTPS_DEFAULT_PROFILES_FILE unless another RMW / profile is chosen.
+
+  Why: the built-in shared-memory transport uses 0.5 MB segments, so 640x480 color (0.9 MB)
+  and 848x480 depth (0.8 MB) images fall back to fragmented UDP loopback between processes
+  (measured on the laptop: depth/color at 7-8 Hz instead of 30 in `ros2 topic hz`,
+  ros2 bag record and RViz). A 32 MB segment carries them over shared memory.
+  UDP stays enabled (bigger socket buffers) for traffic to other machines.
+-->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>d455_shm</transport_id>
+      <type>SHM</type>
+      <segment_size>33554432</segment_size>
+      <maxMessageSize>16777216</maxMessageSize>
+    </transport_descriptor>
+    <transport_descriptor>
+      <transport_id>d455_udp</transport_id>
+      <type>UDPv4</type>
+      <sendBufferSize>8388608</sendBufferSize>
+      <receiveBufferSize>8388608</receiveBufferSize>
+      <maxInitialPeersRange>100</maxInitialPeersRange>
+    </transport_descriptor>
+  </transport_descriptors>
+  <participant profile_name="d455_participant" is_default_profile="true">
+    <rtps>
+      <userTransports>
+        <transport_id>d455_shm</transport_id>
+        <transport_id>d455_udp</transport_id>
+      </userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>

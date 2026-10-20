@@ -1,0 +1,78 @@
+# Platform config: x86_64 laptop, RTX 4050 Laptop GPU, 62 GB RAM.
+
+# Depth limit [m] for everything that builds geometry: RTAB-Map grid/cloud (Grid/RangeMax),
+# nvblox integration range, the RViz map cloud and the default of export_map.sh. 0 = no limit.
+# The camera, the raw bags and the database keep FULL depth, so this can be changed later.
+# cuVSLAM is stereo-based and not affected. Features for loop closure are limited separately
+# (rtabmap.features_max_depth).
+depth_max_m: 3.0
+
+camera:
+  serial_no: ''               # '' = first camera found; set to pin a specific unit
+  usb_port_id: ''
+  depth_width: 848            # IR1/IR2/depth share the depth module profile
+  depth_height: 480
+  depth_fps: 30               # emitter interleave halves this per stream (15 Hz on / 15 Hz off)
+  color_width: 640
+  color_height: 480
+  color_fps: 30
+  gyro_fps: 200
+  accel_fps: 200              # D455 (BMI085) accel: 200/100 Hz on FW 5.13.0.50 (verified)
+  emitter_on_off: true        # interleave + realsense_splitter (cuVSLAM gets emitter-off IR)
+  invert_emitter_mode: true   # D455 FW 5.15.1.55 + librealsense 2.55.1 report the emitter flag inverted
+                              # (verified with `ros2 run d455_mapping emitter_check`); false on FW 5.13.0.50
+  initial_reset: false        # keep false: a hardware reset at start left this D455 streaming nothing ("Motion Module failure")
+
+base_to_camera:               # static TF base_link -> camera_link (camera mounting)
+  xyz: [0.0, 0.0, 0.0]
+  rpy: [0.0, 0.0, 0.0]
+
+vslam:
+  enable_imu_fusion: true
+  image_jitter_threshold_ms: 0.0   # 0 = auto: 1.5 x expected IR period after splitting
+  enable_observations_view: true   # landmark/observation clouds for RViz (costs a little GPU)
+  verbosity: 1
+
+rtabmap:
+  features_max_depth: 0.0          # Kp/MaxDepth + Vis/MaxDepth [m]; 0 = off. Using the depth limit here
+                                   # too also drops far features for loop closure (can weaken loop
+                                   # closures and relocalization in big rooms; map and localize with
+                                   # the same value)
+  odom_source: tf                  # tf: cuVSLAM odom->base_link via TF + fixed variances below
+                                   # topic: /visual_slam/tracking/odometry with its covariance
+                                   #        (cuVSLAM can publish 0 -> RTAB-Map aborts; keep tf)
+  odom_linear_variance: 0.001      # [m^2]   cuVSLAM measured 1.6 cm over 3.3 m (Test 2)
+  odom_angular_variance: 0.001     # [rad^2]
+  detection_rate: 2.0              # Rtabmap/DetectionRate [Hz]
+  kp_max_features: 500             # Kp/MaxFeatures (loop-closure BOW features)
+  vis_max_features: 1000           # Vis/MaxFeatures (loop-closure transform estimation)
+  stm_size: 30                     # Mem/STMSize
+  linear_update: 0.05              # RGBD/LinearUpdate [m]
+  angular_update: 0.05             # RGBD/AngularUpdate [rad]
+  grid_cell_size: 0.05             # Grid/CellSize [m] for /rtabmap/cloud_map
+  cloud_decimation: 2              # depth decimation for the map cloud (RViz/exports)
+  use_imu: true                    # Madgwick-filtered IMU -> gravity constraints in the graph
+  queue_size: 30
+
+nvblox:
+  enable: true                     # mapping.launch.py/localization.launch.py default
+  voxel_size: 0.05                 # [m]; watch the 6 GB VRAM on long sessions
+  map_clearing_radius_m: -1.0      # <= 0: never clear (keep whole map)
+  integrate_depth_rate_hz: 15.0
+  integrate_color_rate_hz: 5.0
+  update_mesh_rate_hz: 2.0
+  publish_layer_rate_hz: 2.0
+
+cross_detector:                    # cross detector (README "Cross detection"); overrides config/cross_detector.yaml
+  process_every_n: 1                 # of the synced color+depth frames (15 Hz): 1 = all
+  detect_scale: 1.0                # RGB detection resolution factor (pixel parameters stay full-resolution)
+  max_segments: 80               # longest line segments that are paired (cost grows with the square)
+
+rviz:
+  show_prior_map: true              # localize.sh also shows the saved cloud (whole map) in RViz
+  enable: true                     # open RViz from map.sh / localize.sh
+  config_suffix: ''                # '' -> mapping.rviz, '_remote' -> mapping_remote.rviz
+
+record:
+  max_bag_size_bytes: 0            # 0 = single file
+  compression: ''                  # '' or 'zstd' (CPU cost!)

@@ -1,0 +1,54 @@
+# Project layer on top of <arch>.ros2_humble.realsense (Isaac ROS 3.2, isaac_ros_common).
+# Built by isaac_ros_common/scripts/build_image_layers.sh via run_dev.sh with
+# CONFIG_IMAGE_KEY=ros2_humble.realsense.d455_mapping (see scripts/setup_workspace.sh).
+# Architecture independent.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# Isaac ROS 3.2 debs 
+ARG ISAAC_ROS_VSLAM_VERSION=3.2.6-0jammy
+ARG ISAAC_ROS_NVBLOX_VERSION=3.2.5-0jammy
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-isaac-ros-visual-slam=${ISAAC_ROS_VSLAM_VERSION} \
+        ros-humble-isaac-ros-nvblox=${ISAAC_ROS_NVBLOX_VERSION} \
+        ros-humble-nvblox-rviz-plugin=${ISAAC_ROS_NVBLOX_VERSION} \
+        ros-humble-rtabmap-ros \
+        ros-humble-rviz2 \
+        ros-humble-pcl-ros \
+        ros-humble-imu-filter-madgwick \
+        ros-humble-rosbag2-storage-mcap \
+        ros-humble-image-transport-plugins \
+        ros-humble-rmw-cyclonedds-cpp \
+        assimp-utils \
+        pcl-tools \
+        git vim less htop \
+    && rm -rf /var/lib/apt/lists/*
+
+
+RUN python3 -m pip install --no-cache-dir "numpy>=1.24.4,<2" "cupy-cuda12x<14" \
+    && source /opt/ros/humble/setup.bash \
+    && python3 -c "import numpy, cv2, cupy, scipy, torch; from cv_bridge import CvBridge; CvBridge(); print('numpy', numpy.__version__, 'cv2', cv2.__version__, 'cupy', cupy.__version__)" \
+    && python3 -m pip check 2>&1 | grep -i numpy && exit 1 || true
+
+RUN source /opt/ros/humble/setup.bash \
+    && for p in isaac_ros_visual_slam nvblox_ros nvblox_rviz_plugin rtabmap_slam rtabmap_rviz_plugins \
+                rtabmap_util realsense2_camera realsense2_camera_msgs pcl_ros imu_filter_madgwick \
+                rosbag2_storage_mcap rviz2 isaac_ros_common; do \
+         ros2 pkg prefix "$p" >/dev/null || { echo "missing ROS package: $p"; exit 1; }; \
+       done \
+    && command -v rtabmap-export && command -v rtabmap-databaseViewer && command -v assimp && command -v pcl_ply2pcd \
+    && dpkg-query -W -f='${Package} ${Version}\n' \
+         ros-humble-isaac-ros-visual-slam ros-humble-isaac-ros-nvblox ros-humble-rtabmap-ros \
+         ros-humble-rtabmap ros-humble-realsense2-camera > /opt/d455_mapping_versions.txt \
+    && cat /opt/d455_mapping_versions.txt
+
+# Interactive shells.
+RUN printf '%s\n' \
+      '# d455_mapping' \
+      'source /opt/ros/humble/setup.bash' \
+      'if [ -f /workspaces/isaac_ros-dev/install/setup.bash ]; then source /workspaces/isaac_ros-dev/install/setup.bash; fi' \
+      >> /etc/bash.bashrc

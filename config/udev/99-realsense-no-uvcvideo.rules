@@ -1,0 +1,9 @@
+# d455_mapping: keep the kernel uvcvideo driver off Intel RealSense D4xx cameras.
+# Our containers use librealsense's libusb (RSUSB) backend. Every time it releases an interface,
+# the kernel re-binds uvcvideo, which then probes the camera concurrently (USB -71/-110 errors,
+# "Error starting device: get_data_usb failed", and on the laptop even xHCI controller crashes).
+# Only RealSense product IDs are matched; other UVC cameras keep working.
+#   0b07 D435, 0b3a D435i, 0b5c D455 (extend the list for other RealSense models)
+ACTION=="bind", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", DRIVER=="uvcvideo", \
+  ATTRS{idVendor}=="8086", ATTRS{idProduct}=="0b07|0b3a|0b5c", \
+  RUN+="/bin/sh -c 'echo -n %k > /sys/bus/usb/drivers/uvcvideo/unbind'"

@@ -1,0 +1,16 @@
+# colcon
+/build/
+/install/
+/log/
+# third-party sources fetched by scripts/setup_workspace.sh (pinned in VERSIONS.md)
+/src/isaac_ros_common/
+/src/realsense_splitter/
+# data (large, machine-local)
+/maps/*
+!/maps/.gitkeep
+/bags/*
+!/bags/.gitkeep
+# misc
+__pycache__/
+*.pyc
+.vscode/

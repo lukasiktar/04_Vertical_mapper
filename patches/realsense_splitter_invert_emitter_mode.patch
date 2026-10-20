@@ -1,0 +1,39 @@
+diff -ruN a/include/realsense_splitter/realsense_splitter_node.hpp b/include/realsense_splitter/realsense_splitter_node.hpp
+--- a/include/realsense_splitter/realsense_splitter_node.hpp	2026-10-16 10:06:13.704896254 +0200
++++ b/include/realsense_splitter/realsense_splitter_node.hpp	2026-10-16 10:06:13.721375049 +0200
+@@ -60,6 +60,7 @@
+     realsense2_camera_msgs::msg::Metadata::ConstSharedPtr metadata);
+ 
+ private:
++  bool invert_emitter_mode_ = false;
+   // Extract the emitter metadata mode
+   int getEmitterModeFromMetadataMsg(
+     const realsense2_camera_msgs::msg::Metadata::ConstSharedPtr & metadata);
+diff -ruN a/src/realsense_splitter_node.cpp b/src/realsense_splitter_node.cpp
+--- a/src/realsense_splitter_node.cpp	2026-10-16 10:06:13.705053787 +0200
++++ b/src/realsense_splitter_node.cpp	2026-10-16 10:06:13.721298042 +0200
+@@ -39,6 +39,14 @@
+     .keep_last(kOutputQueueSize);
+   const rmw_qos_profile_t input_qos_profile = input_qos.get_rmw_qos_profile();
+ 
++  // d455_mapping patch: some D455 firmware / librealsense combinations (e.g. FW 5.15.1.55 with
++  // librealsense 2.55.1) report frame_emitter_mode inverted. Verify with
++  // `ros2 run d455_mapping emitter_check` before enabling.
++  invert_emitter_mode_ = declare_parameter<bool>("invert_emitter_mode", false);
++  if (invert_emitter_mode_) {
++    RCLCPP_WARN(get_logger(), "invert_emitter_mode=true: treating frame_emitter_mode 0 as ON.");
++  }
++
+   // Subscribe to synchronized depth + cam_info topics
+   infra_1_sub_.subscribe(this, "input/infra_1", input_qos_profile);
+   infra_1_metadata_sub_.subscribe(this, "input/infra_1_metadata", input_qos_profile);
+@@ -108,6 +116,9 @@
+   const size_t field_location = frame_emitter_mode_start_location + field_name_length - 1;
+   const int emitter_mode =
+     static_cast<int>(metadata->json_data[field_location]) - static_cast<int>('0');
++  if (invert_emitter_mode_ && (emitter_mode == 0 || emitter_mode == 1)) {
++    return 1 - emitter_mode;
++  }
+   return emitter_mode;
+ }
+ 
