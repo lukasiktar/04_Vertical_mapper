@@ -19,7 +19,11 @@ if [[ ! -d "${SRC}/isaac_ros_common/.git" ]]; then
   git clone -q https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_common.git "${SRC}/isaac_ros_common"
 fi
 git -C "${SRC}/isaac_ros_common" fetch -q --tags origin
+git -C "${SRC}/isaac_ros_common" checkout -q -- scripts/run_dev.sh   # drop the patch below before re-applying
 git -C "${SRC}/isaac_ros_common" -c advice.detachedHead=false checkout -q "${ISAAC_ROS_TAG}"
+# Local patch: NVIDIA_VISIBLE_DEVICES=all on aarch64 (the Jetson host has no CDI GPU spec);
+# only touches the aarch64 branch of run_dev.sh, so it is harmless on the laptop.
+git -C "${SRC}/isaac_ros_common" apply "${WS}/patches/isaac_ros_common_no_cdi.patch"
 touch "${SRC}/isaac_ros_common/COLCON_IGNORE"
 echo "isaac_ros_common @ ${ISAAC_ROS_TAG} ($(git -C "${SRC}/isaac_ros_common" rev-parse --short HEAD))"
 

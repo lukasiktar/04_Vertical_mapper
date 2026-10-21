@@ -174,11 +174,19 @@ def slam_displays(remote: bool, localization: bool, depth_max: float = 4.0):
     d.append(nvblox_color_layer(enabled=False))
     if localization:
         d.append(pose_cov('Localization pose', '/rtabmap/localization_pose'))
-        if not remote:
-            # whole saved map (scripts/localize.sh publishes it once, latched)
-            d.append(pointcloud('Saved map (prior cloud)', '/prior_map', size=0.015, transient=True))
+        # whole saved map (scripts/localize.sh publishes it once, latched; empty unless --prior-map)
+        d.append(pointcloud('Saved map (prior cloud)', '/prior_map', size=0.015, transient=True))
     d += cross_displays(remote)
     d += pins_displays()
+    return d
+
+
+def light_displays(depth_max: float = 4.0):
+    """Minimal set for mapping AND localization over VNC: TF, RTAB-Map MapCloud, crosses, and the
+    saved map (/prior_map, only published by localize.sh --prior-map; empty while mapping)."""
+    d = [tf(), map_cloud(enabled=True, decimation=8, max_depth=depth_max),
+         pointcloud('Saved map (prior cloud)', '/prior_map', size=0.015, transient=True)]
+    d += cross_displays(remote=True)[:2]
     return d
 
 
@@ -196,6 +204,7 @@ def main():
         'mapping_remote.rviz': config(slam_displays(remote=True, localization=False, depth_max=do)),
         'localization.rviz': config(slam_displays(remote=False, localization=True, depth_max=dl)),
         'localization_remote.rviz': config(slam_displays(remote=True, localization=True, depth_max=do)),
+        'light_remote.rviz': config(light_displays(do)),
         'show_map.rviz': config([grid(), tf(), pointcloud('Prior map', '/prior_map', transient=True),
                                  marker('Prior map mesh', '/prior_map_mesh')]),
     }

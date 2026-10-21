@@ -70,6 +70,9 @@ start_container() {
   if [[ -z "${D455_RMW:-}" || "${D455_RMW}" == "rmw_fastrtps_cpp" ]]; then
     RUN_ARGS+=(-a "-e FASTRTPS_DEFAULT_PROFILES_FILE=${FASTRTPS_DEFAULT_PROFILES_FILE:-/workspaces/isaac_ros-dev/config/dds/fastdds_shm.xml}")
   fi
+  # run_dev.sh re-runs the image build on every start (slow: checks/re-runs layers);
+  # skip it when the image exists. Refresh with: ./scripts/dev.sh --build-image
+  [[ -n "$(docker images -q "${IMAGE}")" ]] && RUN_ARGS+=(-b)
   x11_args
   "${COMMON}/scripts/run_dev.sh" "${RUN_ARGS[@]}" "$@"
 }
