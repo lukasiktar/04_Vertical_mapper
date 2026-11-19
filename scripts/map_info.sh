@@ -30,6 +30,13 @@ if t0:
     print(f"  recorded:        {datetime.datetime.fromtimestamp(t0):%Y-%m-%d %H:%M}, {t1 - t0:.0f} s of mapping")
 print(f"  keyframes:       {nodes}  (with RGB-D: {rgbd}, with calibration: {calib})")
 print(f"  global loop closures: {loops}   local proximity closures: {prox}")
+sessions = one("select count(distinct map_id) from Node")
+if sessions > 1:   # scripts/extend_map.sh: is the new session in the old map's coordinates?
+    cross = one("select count(*) from Link l join Node a on a.id = l.from_id join Node b on b.id = l.to_id"
+                " where a.map_id != b.map_id and l.type in (1, 2, 3, 4)")
+    print(f"  sessions:        {sessions}, closures between them: {(cross + 1) // 2} -> "
+          + ("sessions joined (one map, same coordinates)" if cross else
+             "NOT joined: the new session never recognized the old map (not aligned)"))
 if nodes < 30:
     print("  NOTE: very small map; walk longer / slower before relying on it")
 elif loops == 0:
