@@ -5,8 +5,11 @@ Every launch file declares ``platform:=laptop|orin_nano`` and builds its nodes f
 
 Frames (REP-105):
     map -> odom            RTAB-Map (mapping + localization). cuVSLAM does NOT publish it.
-    odom -> base_link      cuVSLAM (smooth visual-inertial odometry)
-    base_link -> camera_link   static, config ``base_to_camera`` (camera mounting)
+    odom -> base_link      cuVSLAM (smooth visual-inertial odometry), or with fuse_px4:=true the
+                           EKF fusing PX4's odometry and cuVSLAM (fusion_nodes)
+    base_link -> camera_link   static, config ``base_to_camera`` (camera mounting); with
+                               fuse_px4:=true or px4_vio:=true ``px4_fusion.base_to_camera``
+                               (base_link = PX4 body)
     camera_link -> camera_*_optical_frame   realsense2_camera (factory extrinsics)
 """
 
@@ -55,6 +58,15 @@ SPLIT_ALIGNED = f'{NS}/aligned_depth_splitter/output'
 
 # Downstream
 T_ODOM = '/visual_slam/tracking/odometry'
+T_VSLAM_STATUS = '/visual_slam/status'
+
+# PX4 fusion (fuse_px4:=true)
+T_PX4_ODOM = '/px4/odom'                # vanguard_ros2: `ros2 run vanguard px4_odom_bridge`
+T_VSLAM_TWIST = '/vslam/twist'          # vslam_twist (cuVSLAM, gated on tracking)
+T_ODOM_FUSED = '/odometry/filtered'     # robot_localization ekf_node
+
+# cuVSLAM -> PX4 external vision (px4_vio:=true)
+T_VSLAM_PX4 = '/vslam/odom_px4'         # vslam_px4 -> vanguard_ros2: `ros2 run vanguard vslam_to_px4_node`
 T_IMU_FILTERED = '/imu/data'
 
 RAW_TOPICS = [
@@ -277,7 +289,7 @@ def vslam_node(cfg) -> ComposableNode:
         # RTAB-Map owns map -> odom and loop closure; cuVSLAM is pure odometry here.
         'enable_localization_n_mapping': False,
         'publish_map_to_odom_tf': False,
-        'publish_odom_to_base_tf': True,
+        'publish_odom_to_base_tf': not cfg.get('fuse_px4', False),  # else the EKF owns it
         'enable_slam_visualization': bool(v['enable_observations_view']),
         'enable_observations_view': bool(v['enable_observations_view']),
         'enable_landmarks_view': False,
@@ -349,7 +361,31 @@ def nvblox_node(cfg) -> ComposableNode:
         ])
 
 
+def running_container_pids() -> List[int]:
+    """PIDs of a d455_container already running: another launch, or one orphaned by a killed one."""
+    pids = []
+    for pid in os.listdir('/proc'):
+        if not pid.isdigit() or int(pid) == os.getpid():
+            continue
+        try:
+            with open(f'/proc/{pid}/cmdline', 'rb') as f:
+                args = f.read().split(b'\0')
+        except OSError:
+            continue
+        if f'__node:={CONTAINER}'.encode() in args:
+            pids.append(int(pid))
+    return pids
+
+
 def container(cfg, nodes: List[ComposableNode]) -> ComposableNodeContainer:
+    """The shared component container. Refuses to start a second one: two camera + cuVSLAM stacks
+    fight over the D455 and publish alternating poses on the same topics ("cuVSLAM jump")."""
+    pids = running_container_pids()
+    if pids:
+        raise RuntimeError(
+            f'another mapper stack is already running ({CONTAINER}, pid {" ".join(map(str, pids))}). '
+            'Only one of map.sh / localize.sh / extend_map.sh / vslam.launch.py at a time: stop it '
+            'first (Ctrl-C in its terminal and wait, or ./scripts/stop.sh)')
     return ComposableNodeContainer(
         name=CONTAINER, namespace='', package='rclcpp_components',
         executable='component_container_mt',
@@ -450,7 +486,7 @@ def rtabmap_parts(cfg, database_path: str, localization: bool, topics=None,
 
     remaps = [('rgbd_image', 'rgbd_image')]
     if not odom_tf:
-        remaps.append(('odom', T_ODOM))
+        remaps.append(('odom', T_ODOM_FUSED if cfg.get('fuse_px4', False) else T_ODOM))
     if use_imu:
         remaps.append(('imu', T_IMU_FILTERED))
 
@@ -458,6 +494,104 @@ def rtabmap_parts(cfg, database_path: str, localization: bool, topics=None,
         package='rtabmap_slam', plugin='rtabmap_slam::CoreWrapper', name='rtabmap',
         namespace='rtabmap', parameters=[rtab_params], remappings=remaps))
     return components, actions
+
+
+# --------------------------------------------------------------------------------------------
+# PX4 + cuVSLAM fusion
+# --------------------------------------------------------------------------------------------
+def fusion_nodes(cfg) -> List[Node]:
+    """odom -> base_link from robot_localization's EKF instead of cuVSLAM (fuse_px4:=true).
+
+    Inputs: PX4's odometry (pose + twist, /px4/odom from the vanguard_ros2 container) and
+    cuVSLAM's twist (vslam_twist, dropped while cuVSLAM is not tracking). Each is weighted by
+    its covariance: with OptiTrack the EKF follows PX4 closely, with optical flow only cuVSLAM
+    counts for more, and when the camera is too close to see anything PX4 carries on alone.
+    """
+    f = cfg['px4_fusion']
+    sim = cfg['use_sim_time']
+    # robot_localization order: x y z, roll pitch yaw, vx vy vz, vroll vpitch vyaw, ax ay az
+    pose_and_twist = [True] * 12 + [False] * 3
+    twist_only = [False] * 6 + [True] * 6 + [False] * 3
+    ekf = {
+        'frequency': float(f['ekf_rate_hz']),
+        'sensor_timeout': 0.2,
+        'two_d_mode': False,
+        'publish_tf': True,
+        'map_frame': MAP_FRAME,
+        'odom_frame': ODOM_FRAME,
+        'base_link_frame': BASE_FRAME,
+        'world_frame': ODOM_FRAME,
+        # cuVSLAM is stamped at image time, behind PX4: re-run the filter from a late measurement
+        'smooth_lagged_data': True,
+        'history_length': 1.0,
+        'odom0': T_PX4_ODOM,
+        'odom0_config': pose_and_twist,
+        'odom0_queue_size': 20,
+        'twist0': T_VSLAM_TWIST,
+        'twist0_config': twist_only,
+        'twist0_queue_size': 10,
+        # A cuVSLAM velocity this many sigmas away from the estimate is dropped
+        'twist0_rejection_threshold': float(f['vslam_rejection_threshold']),
+        'use_sim_time': sim,
+    }
+    gate = {
+        'odom_topic': T_ODOM,
+        'status_topic': T_VSLAM_STATUS,
+        'twist_topic': T_VSLAM_TWIST,
+        'base_frame': BASE_FRAME,
+        'linear_variance': float(f['vslam_linear_variance']),
+        'angular_variance': float(f['vslam_angular_variance']),
+        'max_speed': float(f['vslam_max_speed']),
+        'max_rate': float(f['vslam_max_rate']),
+        'resume_skip': int(f['vslam_resume_skip']),
+        'use_sim_time': sim,
+    }
+    return [
+        Node(package=PACKAGE, executable='vslam_twist', name='vslam_twist', output='screen',
+             emulate_tty=True, parameters=[gate]),
+        Node(package='robot_localization', executable='ekf_node', name='px4_fusion_ekf',
+             output='screen', parameters=[ekf]),
+    ]
+
+
+# --------------------------------------------------------------------------------------------
+# cuVSLAM -> PX4 external vision
+# --------------------------------------------------------------------------------------------
+def px4_vio_arg() -> DeclareLaunchArgument:
+    return DeclareLaunchArgument(
+        'px4_vio', default_value='false',
+        description='true/false: send cuVSLAM to PX4 as external vision (/vslam/odom_px4, run '
+                    '`ros2 run vanguard vslam_to_px4_node` in vanguard_ros2); base_link = PX4 body')
+
+
+def px4_vio_nodes(context, cfg) -> List[Node]:
+    """px4_vio:=true: base_link = PX4 body and the gate node that passes cuVSLAM on to PX4 only
+    while it is tracking. Changes cfg['base_to_camera'], so call it before camera_actions(cfg).
+
+    cuVSLAM keeps publishing odom -> base_link (no EKF here: PX4's EKF2 does the fusion). Not
+    together with fuse_px4:=true, which would fuse cuVSLAM a second time on top of PX4's estimate.
+    """
+    if not truthy(context.perform_substitution(_lc('px4_vio'))):
+        return []
+    if cfg.get('fuse_px4', False):
+        raise RuntimeError('px4_vio:=true and fuse_px4:=true: PX4 already fuses cuVSLAM, the '
+                           'fusion EKF would count it twice. Use one of them.')
+    # cuVSLAM then reports the pose of the PX4 body, which is what PX4 expects
+    cfg['base_to_camera'] = cfg['px4_fusion']['base_to_camera']
+    v = cfg['px4_vio']
+    gate = {
+        'odom_topic': T_ODOM,
+        'status_topic': T_VSLAM_STATUS,
+        'out_topic': T_VSLAM_PX4,
+        'position_variance': float(v['position_variance']),
+        'orientation_variance': float(v['orientation_variance']),
+        'max_speed': float(v['max_speed']),
+        'max_rate': float(v['max_rate']),
+        'resume_skip': int(v['resume_skip']),
+        'use_sim_time': cfg['use_sim_time'],
+    }
+    return [Node(package=PACKAGE, executable='vslam_px4', name='vslam_px4', output='screen',
+                 emulate_tty=True, parameters=[gate])]
 
 
 def rviz_action(cfg, name: str) -> Node:
@@ -506,15 +640,17 @@ def cross_args() -> List[DeclareLaunchArgument]:
 
 
 def cross_detector_node(cfg, landmarks_file: str, require_localization: bool, start_empty: bool,
-                        extra_params: str = '') -> Node:
+                        extra_params: str = '', link_node_max: int = 0) -> Node:
     """cross_detector.yaml defaults < platform `cross_detector:` block < launch-derived values
-    < the optional `cross_params` file. Depth follows the same rule as RTAB-Map's."""
+    < the optional `cross_params` file. Depth follows the same rule as RTAB-Map's.
+    `link_node_max` > 0 (extend mode): fuse only after a loop closure to an old node (id <= it)."""
     params = [share('config', 'cross_detector.yaml'),
               dict(cfg.get('cross_detector') or {}),
               {'depth_topic': rtabmap_depth_topic(cfg),
                'landmarks_file': landmarks_file,
                'require_localization': require_localization,
                'start_empty': start_empty,
+               'link_node_max': int(link_node_max),
                'use_sim_time': cfg['use_sim_time']}]
     if extra_params:
         params.append(extra_params)
@@ -535,6 +671,17 @@ def slam_args() -> List[DeclareLaunchArgument]:
         DeclareLaunchArgument('with_cross_detector', default_value='false',
                               description='true/false: run the cross detector (README "Cross detection")'),
         DeclareLaunchArgument('database_path', default_value='/maps/map.db'),
+        DeclareLaunchArgument('keep_database', default_value='false',
+                              description='mapping only: map into the existing database_path as a new '
+                                          'session instead of deleting it (scripts/extend_map.sh)'),
+        DeclareLaunchArgument('link_node_max', default_value='0',
+                              description='with keep_database: highest node id of the old map; the cross '
+                                          'detector fuses only after a loop closure to one of them'),
+        DeclareLaunchArgument('fuse_px4', default_value='false',
+                              description='true/false: odometry = EKF of PX4 (/px4/odom, run '
+                                          '`ros2 run vanguard px4_odom_bridge` in vanguard_ros2) '
+                                          '+ cuVSLAM, instead of cuVSLAM alone'),
+        px4_vio_arg(),
         DeclareLaunchArgument('nvblox', default_value='',
                               description='true/false; empty = platform default'),
         DeclareLaunchArgument('rviz', default_value='',
@@ -552,19 +699,33 @@ def build_slam(context, localization: bool) -> list:
     rviz = context.perform_substitution(_lc('rviz'))
     use_nvblox = truthy(nvblox) if nvblox else bool(cfg['nvblox']['enable'])
     use_rviz = truthy(rviz) if rviz else bool(cfg['rviz']['enable'])
-    if localization and not os.path.isfile(db):
+    cfg['fuse_px4'] = truthy(context.perform_substitution(_lc('fuse_px4')))
+    if cfg['fuse_px4']:
+        # base_link = PX4 body, so PX4 and cuVSLAM describe the motion of the same frame
+        cfg['base_to_camera'] = cfg['px4_fusion']['base_to_camera']
+    vio_nodes = px4_vio_nodes(context, cfg)
+    keep = not localization and truthy(context.perform_substitution(_lc('keep_database')))
+    link_node_max = int(context.perform_substitution(_lc('link_node_max')) or 0) if keep else 0
+    if (localization or keep) and not os.path.isfile(db):
         raise RuntimeError(f'database_path {db} does not exist (create it with scripts/map.sh)')
 
-    if not localization and os.path.exists(db):
+    if not localization and not keep and os.path.exists(db):
         os.remove(db)               # new database each mapping run (scripts/map.sh guards this)
     actions = camera_actions(cfg)
-    rtab_components, rtab_actions = rtabmap_parts(cfg, db, localization=localization)
+    # keep_database: a new session in the old database. With the old nodes in working memory it
+    # can close loops on them, which joins it to the old map (scripts/extend_map.sh).
+    rtab_components, rtab_actions = rtabmap_parts(
+        cfg, db, localization=localization,
+        extra_params={'Mem/InitWMWithAllNodes': 'true'} if keep else None)
     nodes = camera_node(cfg) + splitter_nodes(cfg) + [vslam_node(cfg)]
     if use_nvblox:
         nodes.append(nvblox_node(cfg))
     actions.append(container(cfg, nodes + rtab_components))
     actions += rtab_actions
-    prior = context.perform_substitution(_lc('prior_map')) if localization else ''
+    if cfg['fuse_px4']:
+        actions += fusion_nodes(cfg)
+    actions += vio_nodes
+    prior =context.perform_substitution(_lc('prior_map')) if localization else ''
     if prior:
         if os.path.isfile(prior):
             actions.append(Node(
@@ -579,8 +740,10 @@ def build_slam(context, localization: bool) -> list:
             require_localization=localization))
     if truthy(context.perform_substitution(_lc('with_cross_detector'))):
         actions.append(cross_detector_node(
-            cfg, crosses, require_localization=localization, start_empty=not localization,
-            extra_params=context.perform_substitution(_lc('cross_params'))))
+            cfg, crosses, require_localization=localization,
+            start_empty=not localization and not keep,
+            extra_params=context.perform_substitution(_lc('cross_params')),
+            link_node_max=link_node_max))
     if use_rviz:
         actions.append(rviz_action(cfg, 'localization' if localization else 'mapping'))
     return actions

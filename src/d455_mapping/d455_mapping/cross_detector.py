@@ -10,7 +10,12 @@ Subscribes (defaults = our camera launch; aligned depth uses the color intrinsic
     depth_topic  /camera/aligned_depth_splitter/output/depth   (emitter ON; without the
                  splitter: /camera/aligned_depth_to_color/image_raw)
     info_topic   /camera/color/camera_info
-    localization_topic  /rtabmap/localization_pose  (only with require_localization)
+    localization_topic  /rtabmap/localization_pose  (only with require_localization; RTAB-Map
+                 also publishes it while lost, with covariance 9999: only a position variance
+                 <= localization_max_variance counts as localized)
+    /rtabmap/info  (only with link_node_max > 0, scripts/extend_map.sh: the new session is in the
+                 old map's coordinates only after a loop closure to an old node, id <= link_node_max;
+                 nothing is fused before that)
 Publishes:
     ~/live_markers  MarkerArray  green crosses of the current frame, in the camera frame
     ~/landmarks     MarkerArray  orange confirmed landmarks "cross N", in target_frame (map)
@@ -33,6 +38,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
+from rtabmap_msgs.msg import Info
 from sensor_msgs.msg import CameraInfo, Image, Imu
 from visualization_msgs.msg import Marker, MarkerArray
 
@@ -61,6 +67,9 @@ class CrossDetectorNode(Node):
         self.require_loc = bool(param('require_localization', False))
         loc_topic = param('localization_topic', '/rtabmap/localization_pose')
         self.loc_timeout = float(param('localization_timeout_s', 30.0))
+        self.loc_max_var = float(param('localization_max_variance', 1.0))
+        self.link_node_max = int(param('link_node_max', 0))
+        self.linked = False
         self.landmarks_file = param('landmarks_file', '')
         self.save_period = float(param('save_period_s', 10.0))
         self.marker_arm = float(param('marker_arm_m', 0.3))
@@ -101,6 +110,8 @@ class CrossDetectorNode(Node):
             self.create_subscription(Imu, imu_topic, self._on_imu, qos_profile_sensor_data)
         if self.require_loc:
             self.create_subscription(PoseWithCovarianceStamped, loc_topic, self._on_loc, 10)
+        if self.link_node_max > 0:
+            self.create_subscription(Info, '/rtabmap/info', self._on_rtabmap_info, 10)
         subs = [message_filters.Subscriber(self, Image, color_topic, qos_profile=qos_profile_sensor_data),
                 message_filters.Subscriber(self, Image, depth_topic, qos_profile=qos_profile_sensor_data)]
         self.sync = message_filters.ApproximateTimeSynchronizer(subs, queue_size=5, slop=self.sync_slop)
@@ -153,13 +164,25 @@ class CrossDetectorNode(Node):
         q = tf.transform.rotation
         return quat_to_rot(q.x, q.y, q.z, q.w) @ (R_world_imu.T @ np.array([0.0, 0.0, 1.0]))
 
-    def _on_loc(self, _msg):
-        self.last_loc = self._now()
+    def _on_loc(self, msg):
+        if msg.pose.covariance[0] <= self.loc_max_var:      # 9999 = RTAB-Map is lost
+            self.last_loc = self._now()
+
+    def _on_rtabmap_info(self, msg):
+        for node_id in (msg.loop_closure_id, msg.proximity_detection_id):
+            if not self.linked and 0 < node_id <= self.link_node_max:
+                self.linked = True
+                self.get_logger().info(f'joined the old map (loop closure to node {node_id}): '
+                                       'fusing detections from now on')
 
     def _now(self):
         return self.get_clock().now().nanoseconds * 1e-9
 
     def _fusion_allowed(self, now):
+        if self.link_node_max > 0 and not self.linked:
+            self.get_logger().info('not joined to the old map yet: detections are shown but not '
+                                   'fused', throttle_duration_sec=10.0)
+            return False
         if not self.require_loc:
             return True
         ok = self.last_loc is not None and now - self.last_loc <= self.loc_timeout

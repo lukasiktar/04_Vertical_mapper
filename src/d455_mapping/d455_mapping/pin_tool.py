@@ -11,7 +11,8 @@ its pin. Pins are stored in ``target_frame`` (map) in ``pins_file`` and saved on
 
 Subscribes: /clicked_point (PointStamped), /cross_detector/landmarks (MarkerArray, cross centers;
             falls back to ``crosses_file`` when the detector is not running),
-            /rtabmap/localization_pose (only with require_localization)
+            /rtabmap/localization_pose (only with require_localization; one with a position
+            variance > localization_max_variance, RTAB-Map's 9999 while lost, does not count)
 Publishes:  ~/markers    MarkerArray  pins (magenta), camera->pin lines (cyan) + distance labels
             ~/distances  std_msgs/String  JSON: distance and camera-frame offsets per pin
 Service:    ~/clear      std_srvs/Trigger  remove all pins
@@ -50,7 +51,8 @@ class PinTool(Node):
         self.snap_radius = float(param('snap_radius_m', 0.8))
         self.require_loc = bool(param('require_localization', False))
         self.loc_timeout = float(param('localization_timeout_s', 30.0))
-        rate = float(param('rate_hz', 5.0))
+        self.loc_max_var = float(param('localization_max_variance', 1.0))
+        rate =float(param('rate_hz', 5.0))
 
         self.store = PinStore(self.target_frame)
         try:
@@ -70,7 +72,7 @@ class PinTool(Node):
         self.create_subscription(MarkerArray, '/cross_detector/landmarks', self._on_landmarks, 5)
         if self.require_loc:
             self.create_subscription(PoseWithCovarianceStamped, '/rtabmap/localization_pose',
-                                     lambda _m: setattr(self, 'last_loc', self._now()), 10)
+                                     self._on_loc, 10)
         self.marker_pub = self.create_publisher(MarkerArray, '~/markers', 5)
         self.dist_pub = self.create_publisher(String, '~/distances', 5)
         self.create_subscription(Int32, '~/pin_cross', self._on_pin_cross, 5)
@@ -179,6 +181,10 @@ class PinTool(Node):
             return None
         q, t = tf.transform.rotation, tf.transform.translation
         return quat_to_rot(q.x, q.y, q.z, q.w), np.array([t.x, t.y, t.z])
+
+    def _on_loc(self, msg):
+        if msg.pose.covariance[0] <= self.loc_max_var:      # 9999 = RTAB-Map is lost
+            self.last_loc = self._now()
 
     def _localized(self):
         return (not self.require_loc) or (self.last_loc is not None

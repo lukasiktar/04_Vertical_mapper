@@ -25,6 +25,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         ros-humble-rviz2 \
         ros-humble-pcl-ros \
         ros-humble-imu-filter-madgwick \
+        ros-humble-robot-localization \
         ros-humble-rosbag2-storage-mcap \
         ros-humble-image-transport-plugins \
         ros-humble-rmw-cyclonedds-cpp \
@@ -41,7 +42,7 @@ RUN python3 -m pip install --no-cache-dir "numpy>=1.24.4,<2" "cupy-cuda12x<14" \
 
 RUN source /opt/ros/humble/setup.bash \
     && for p in isaac_ros_visual_slam nvblox_ros nvblox_rviz_plugin rtabmap_slam rtabmap_rviz_plugins \
-                rtabmap_util realsense2_camera realsense2_camera_msgs pcl_ros imu_filter_madgwick \
+                rtabmap_util realsense2_camera realsense2_camera_msgs pcl_ros imu_filter_madgwick robot_localization \
                 rosbag2_storage_mcap rviz2 isaac_ros_common; do \
          ros2 pkg prefix "$p" >/dev/null || { echo "missing ROS package: $p"; exit 1; }; \
        done \

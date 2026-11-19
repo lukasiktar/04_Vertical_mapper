@@ -13,6 +13,8 @@
     require_localization: false    # true in localization mode: fuse only after RTAB-Map relocalized
     localization_topic: /rtabmap/localization_pose
     localization_timeout_s: 30.0
+    localization_max_variance: 1.0  # [m^2]; RTAB-Map publishes 9999 while it is lost
+    link_node_max: 0               # set by scripts/extend_map.sh: fuse only once joined to the old map
     sync_slop_s: 0.04
     tf_fallback_latest: true
     save_period_s: 10.0            # autosave when a landmark changed (and always on shutdown)

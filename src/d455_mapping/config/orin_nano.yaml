@@ -17,7 +17,11 @@ camera:
                               # with interleave, which is marginal for tracking; prefer 30)
   color_width: 640
   color_height: 480
-  color_fps: 15
+  color_fps: 30               # = depth_fps, keep it so. Aligned depth is paired with the nearest
+                              # color frame and RTAB-Map only gets the emitter-ON half; at 15 fps
+                              # color the pairing drifts between ON and OFF depth frames (separate
+                              # sensor clocks), so RTAB-Map got no depth ~60 s of every ~120 s
+                              # (measured 2026-11-05: 37 keyframes in a 642 s map)
   gyro_fps: 200
   accel_fps: 200
   emitter_on_off: true
@@ -27,6 +31,43 @@ camera:
 base_to_camera:
   xyz: [0.0, 0.0, 0.0]
   rpy: [0.0, 0.0, 0.0]
+
+# PX4 + cuVSLAM odometry fusion: `scripts/map.sh <name> <platform> fuse_px4:=true` (same for
+# localize.sh). Needs `ros2 run vanguard px4_odom_bridge` in the vanguard_ros2 container
+# (-> /px4/odom). JETSON_QUICKSTART.md "2b".
+px4_fusion:
+  # Camera mounting in the PX4 body frame, used instead of base_to_camera with fuse_px4:=true or
+  # px4_vio:=true so that base_link = PX4 body (x forward, y left, z up [m]; roll pitch yaw [rad],
+  # pitch + = looking down). xyz from calibrate_rig.sh on stup_indoor_1 (checked with a ruler);
+  # rpy from PX4 gyro vs cuVSLAM rotation, hand test 2026-11-04 (was -0.0059 0.1105 -0.0383 from
+  # calibrate_rig.sh, 2.3 deg off). Redo both if the mount moved.
+  # 2026-11-13: rpy redone, PX4 gyro vs cuVSLAM rotation (bags cam_run1/2: pitch 13 deg off the
+  # 2026-11-04 value; OptiTrack hand-eye handeye_run1 agrees, -13.9 deg). Was 0.0005 0.1324 -0.0045.
+  # xyz redone 2026-11-13 from OptiTrack hand-eye (handeye_run1: camera rel. pivot 0.119 0.043 -0.045,
+  # about 1.5 cm scatter) minus the IMU rel. pivot from the lever-arm fit (leverarm_run1/2: -0.005
+  # -0.009 0.004 in FLU). ASSUMES those lever-arm bags were recorded with the current Motive pivot;
+  # if not, redo the lever-arm run. Was 0.144 -0.021 0.023 (ruler / calibrate_rig.sh).
+  base_to_camera:
+    xyz: [0.124, 0.052, -0.049]
+    rpy: [-0.0004, 0.3601, -0.0160]
+  ekf_rate_hz: 50.0
+  vslam_linear_variance: 0.0025    # (5 cm/s)^2: cuVSLAM velocity between two poses
+  vslam_angular_variance: 0.0025   # (3 deg/s)^2
+  vslam_rejection_threshold: 5.0   # sigmas: a cuVSLAM velocity this far from the EKF's is dropped
+  vslam_max_speed: 5.0             # m/s between two poses; faster = a jump, dropped
+  vslam_max_rate: 6.0              # rad/s, same
+  vslam_resume_skip: 5             # poses dropped after cuVSLAM regains tracking
+
+# cuVSLAM -> PX4 EKF2 as external vision: `ros2 launch d455_mapping vslam.launch.py
+# platform:=<platform> px4_vio:=true` (or map.sh / localize.sh ... px4_vio:=true). Needs
+# `ros2 run vanguard vslam_to_px4_node` in the vanguard_ros2 container. Uses
+# px4_fusion.base_to_camera. JETSON_QUICKSTART.md "2c".
+px4_vio:
+  position_variance: 0.01          # (10 cm)^2; PX4 uses max(this, EKF2_EVP_NOISE^2)
+  orientation_variance: 0.01       # (0.1 rad)^2; PX4 uses max(this, EKF2_EVA_NOISE^2)
+  max_speed: 5.0                   # m/s between two poses; faster = a jump, dropped
+  max_rate: 6.0                    # rad/s, same
+  resume_skip: 5                   # poses dropped after cuVSLAM regains tracking
 
 vslam:
   enable_imu_fusion: true
